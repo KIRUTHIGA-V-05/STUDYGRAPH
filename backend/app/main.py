@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import quiz
+from app.models import core, quiz as quiz_models # Import models to register them
 
 app = FastAPI(
     title="StudyGraph API",

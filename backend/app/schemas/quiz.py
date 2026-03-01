@@ -14,6 +14,7 @@ class QuizQuestionPublic(BaseModel):
     options: List[str]
 
 class QuizGenerationRequest(BaseModel):
+    lesson_id: str = Field(..., description="ID of the lesson to generate quiz for")
     module_content: str = Field(..., description="The text content or lesson notes to generate questions from")
     num_questions: int = Field(default=5, description="Number of questions to generate")
 
