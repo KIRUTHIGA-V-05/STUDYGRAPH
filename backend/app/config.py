@@ -8,7 +8,7 @@ class Settings:
     PROJECT_VERSION: str = "1.0.0"
     
     # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://neondb_owner:npg_D3hSQH6sGMrP@ep-quiet-wave-a16iv47z-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require")
+    DATABASE_URL: str = os.getenv("DATABASE_URL")
     
     # AI
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY")
