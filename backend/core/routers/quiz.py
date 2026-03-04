@@ -6,7 +6,7 @@ import uuid
 from database import get_db
 from dependencies import get_current_user
 from config import settings
-from models import Course, Module, Lesson, LessonSchedule, User, XPTracker
+from models import Course, Module, Lesson,  User, XPTracker
 from schemas import QuizGenerateRequest, QuizSubmitRequest, QuizResultResponse, TokenData
 
 router = APIRouter()
