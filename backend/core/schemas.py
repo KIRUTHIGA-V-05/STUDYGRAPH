@@ -33,7 +33,6 @@ class UserResponse(BaseModel):
     timezone: str
     xp: int
     streak: int
-    created_at: datetime
 
     class Config:
         from_attributes = True

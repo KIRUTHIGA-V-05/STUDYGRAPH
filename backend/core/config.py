@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     PLANNER_SERVICE_URL: str = "http://localhost:8001"
     QUIZ_SERVICE_URL: str   = "http://localhost:8002"
     CALENDAR_SERVICE_URL: str = "http://localhost:8003"
+    SCHEDULER_SERVICE_URL: str = "http://localhost:8004"
 
     class Config:
         env_file = ".env"
