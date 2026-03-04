@@ -5,47 +5,44 @@ import uuid
 
 from database import get_db
 from dependencies import get_current_user
-from models import Course, Module, Lesson, LessonSchedule
+from models import Course, Module, Lesson, CalendarEvent
 from schemas import SchedulerRequest, SchedulerResponse, ScheduledLessonOut, TodayResponse, TodayLessonOut, TokenData
 
 router = APIRouter()
 
 
-def calculate_schedule(
+def build_schedule(
     lessons: list,
     start_date: date,
     days_per_week: int,
     daily_study_minutes: int,
 ) -> list:
-    study_days_of_week = list(range(days_per_week))
-    scheduled = []
+    study_days = list(range(days_per_week))
+    result = []
     current_date = start_date
-    day_minutes_used = 0
-    lesson_index = 0
+    minutes_used_today = 0
+    index = 0
 
-    while lesson_index < len(lessons):
-        if current_date.weekday() in study_days_of_week:
-            available = daily_study_minutes - day_minutes_used
-
-            while lesson_index < len(lessons) and available > 0:
-                lesson = lessons[lesson_index]
-                difficulty_weight = 1 + (lesson.difficulty - 1) * 0.2
-                allocated = min(int(lesson.estimated_minutes * difficulty_weight), available)
+    while index < len(lessons):
+        if current_date.weekday() in study_days:
+            available = daily_study_minutes - minutes_used_today
+            while index < len(lessons) and available > 0:
+                lesson = lessons[index]
+                weight = lesson.difficulty_weight if hasattr(lesson, "difficulty_weight") else 1.0
+                allocated = min(int((lesson.estimated_minutes or 30) * (weight or 1.0)), available)
                 allocated = max(allocated, 10)
-
-                scheduled.append({
+                result.append({
                     "lesson": lesson,
                     "scheduled_date": current_date.isoformat(),
                     "allocated_minutes": allocated,
                 })
                 available -= allocated
-                day_minutes_used += allocated
-                lesson_index += 1
-
+                minutes_used_today += allocated
+                index += 1
         current_date += timedelta(days=1)
-        day_minutes_used = 0
+        minutes_used_today = 0
 
-    return scheduled
+    return result
 
 
 @router.post("/assign", response_model=SchedulerResponse, status_code=status.HTTP_201_CREATED)
@@ -66,7 +63,7 @@ def assign_schedule(
         db.query(Lesson)
         .join(Module)
         .filter(Module.course_id == body.course_id)
-        .order_by(Module.order_index, Lesson.order_index)
+        .order_by(Module.order, Lesson.order)
         .all()
     )
 
@@ -79,36 +76,25 @@ def assign_schedule(
     try:
         start = date.fromisoformat(body.start_date)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid start_date format. Use YYYY-MM-DD.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid start_date format. Use YYYY-MM-DD.",
+        )
 
-    scheduled_entries = calculate_schedule(
+    scheduled = build_schedule(
         lessons=lessons,
         start_date=start,
         days_per_week=body.days_per_week,
         daily_study_minutes=body.daily_study_minutes,
     )
 
-    for entry in scheduled_entries:
-        existing = db.query(LessonSchedule).filter(LessonSchedule.lesson_id == entry["lesson"].id).first()
-        if existing:
-            existing.scheduled_date = entry["scheduled_date"]
-            existing.allocated_minutes = entry["allocated_minutes"]
-            existing.status = "pending"
-        else:
-            schedule = LessonSchedule(
-                lesson_id=entry["lesson"].id,
-                scheduled_date=entry["scheduled_date"],
-                allocated_minutes=entry["allocated_minutes"],
-            )
-            db.add(schedule)
-
     db.commit()
 
-    end_date = scheduled_entries[-1]["scheduled_date"] if scheduled_entries else body.start_date
+    end_date = scheduled[-1]["scheduled_date"] if scheduled else body.start_date
 
     return SchedulerResponse(
         course_id=body.course_id,
-        total_scheduled=len(scheduled_entries),
+        total_scheduled=len(scheduled),
         end_date=end_date,
         scheduled_lessons=[
             ScheduledLessonOut(
@@ -116,9 +102,8 @@ def assign_schedule(
                 lesson_title=e["lesson"].title,
                 scheduled_date=e["scheduled_date"],
                 allocated_minutes=e["allocated_minutes"],
-                status="pending",
             )
-            for e in scheduled_entries
+            for e in scheduled
         ],
     )
 
@@ -137,27 +122,24 @@ def get_todays_lessons(
     if not course:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found.")
 
-    today_str = date.today().isoformat()
-
-    results = (
-        db.query(Lesson, LessonSchedule)
-        .join(LessonSchedule, Lesson.id == LessonSchedule.lesson_id)
-        .join(Module, Lesson.module_id == Module.id)
-        .filter(Module.course_id == course_id, LessonSchedule.scheduled_date == today_str)
-        .order_by(Lesson.order_index)
+    lessons = (
+        db.query(Lesson)
+        .join(Module)
+        .filter(Module.course_id == course_id, Lesson.status == "pending")
+        .order_by(Module.order, Lesson.order)
+        .limit(5)
         .all()
     )
 
     return TodayResponse(
-        date=today_str,
+        date=date.today().isoformat(),
         lessons=[
             TodayLessonOut(
-                lesson_id=lesson.id,
-                title=lesson.title,
-                difficulty=lesson.difficulty,
-                allocated_minutes=schedule.allocated_minutes,
-                status=schedule.status,
+                lesson_id=l.id,
+                title=l.title,
+                estimated_minutes=l.estimated_minutes,
+                status=l.status,
             )
-            for lesson, schedule in results
+            for l in lessons
         ],
     )

@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from datetime import datetime, timezone, date
 import uuid
 
 from database import get_db
 from dependencies import get_current_user
-from models import Course, Module, Lesson, LessonSchedule, User, ProgressLog, XPTracker
+from models import Course, Module, Lesson, User, ProgressLog
 from schemas import ProgressResponse, MarkCompleteRequest, TokenData
 
 router = APIRouter()
@@ -25,16 +26,15 @@ def get_progress(
     if not course:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found.")
 
-    all_schedules = (
-        db.query(LessonSchedule)
-        .join(Lesson, LessonSchedule.lesson_id == Lesson.id)
-        .join(Module, Lesson.module_id == Module.id)
+    all_lessons = (
+        db.query(Lesson)
+        .join(Module)
         .filter(Module.course_id == course_id)
         .all()
     )
 
-    total = len(all_schedules)
-    completed = sum(1 for s in all_schedules if s.status == "completed")
+    total      = len(all_lessons)
+    completed  = sum(1 for l in all_lessons if l.status == "completed")
     percentage = round((completed / total) * 100, 2) if total > 0 else 0.0
 
     user = db.query(User).filter(User.id == current_user.user_id).first()
@@ -46,7 +46,7 @@ def get_progress(
         completion_percentage=percentage,
         current_streak=user.streak if user else 0,
         total_xp=user.xp if user else 0,
-        last_activity=user.last_activity if user else None,
+        last_activity=None,
     )
 
 
@@ -66,15 +66,13 @@ def mark_lesson_complete(
     if not lesson:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found.")
 
-    from models import Base
-    from sqlalchemy import text
     quiz_passed = db.execute(
         text(
             "SELECT id FROM quiz_results "
-            "WHERE lesson_id = :lid AND score >= (SELECT COUNT(*) * 0.7 FROM quiz_questions WHERE lesson_id = :lid) "
+            "WHERE lesson_id = :lid AND user_id = :uid "
             "ORDER BY completed_at DESC LIMIT 1"
         ),
-        {"lid": str(body.lesson_id)},
+        {"lid": str(body.lesson_id), "uid": str(current_user.user_id)},
     ).fetchone()
 
     if not quiz_passed:
@@ -83,26 +81,34 @@ def mark_lesson_complete(
             detail="You must pass the quiz before marking this lesson as complete.",
         )
 
-    schedule = db.query(LessonSchedule).filter(LessonSchedule.lesson_id == body.lesson_id).first()
-    if schedule:
-        schedule.status = "completed"
-        schedule.completed_at = datetime.now(timezone.utc)
+    lesson.status = "completed"
 
     user = db.query(User).filter(User.id == current_user.user_id).first()
     if user:
+        last = db.execute(
+            text(
+                "SELECT timestamp FROM progress_logs "
+                "WHERE user_id = :uid ORDER BY timestamp DESC LIMIT 1"
+            ),
+            {"uid": str(current_user.user_id)},
+        ).fetchone()
         today = date.today()
-        if user.last_activity and user.last_activity.date() == today:
-            pass
-        elif user.last_activity and (today - user.last_activity.date()).days == 1:
-            user.streak = (user.streak or 0) + 1
+        if last:
+            last_date = last.timestamp.date()
+            if last_date == today:
+                pass
+            elif (today - last_date).days == 1:
+                user.streak = (user.streak or 0) + 1
+            else:
+                user.streak = 1
         else:
             user.streak = 1
-        user.last_activity = datetime.now(timezone.utc)
 
     db.add(ProgressLog(
         user_id=current_user.user_id,
         lesson_id=body.lesson_id,
-        action="lesson_completed",
+        activity_type="lesson_completed",
+        duration_seconds=None,
     ))
 
     db.commit()

@@ -41,7 +41,7 @@ class UserResponse(BaseModel):
 
 class PlannerRequest(BaseModel):
     topic: str
-    target_days: int
+    duration_days: int
     days_per_week: int
     daily_study_minutes: int
     user_context: str = "Undergraduate Student"
@@ -50,9 +50,9 @@ class PlannerRequest(BaseModel):
 class LessonOut(BaseModel):
     id: uuid.UUID
     title: str
-    difficulty: int
     estimated_minutes: int
-    order_index: int
+    order: int
+    status: str
 
     class Config:
         from_attributes = True
@@ -61,9 +61,8 @@ class LessonOut(BaseModel):
 class ModuleOut(BaseModel):
     id: uuid.UUID
     title: str
-    description: Optional[str]
-    order_index: int
-    quiz_checkpoint: bool
+    order: int
+    difficulty_weight: Optional[float]
     lessons: List[LessonOut]
 
     class Config:
@@ -72,7 +71,7 @@ class ModuleOut(BaseModel):
 
 class PlannerResponse(BaseModel):
     course_id: uuid.UUID
-    topic: str
+    title: str
     total_modules: int
     total_lessons: int
     modules: List[ModuleOut]
@@ -91,7 +90,6 @@ class ScheduledLessonOut(BaseModel):
     lesson_title: str
     scheduled_date: str
     allocated_minutes: int
-    status: str
 
 
 class SchedulerResponse(BaseModel):
@@ -104,8 +102,7 @@ class SchedulerResponse(BaseModel):
 class TodayLessonOut(BaseModel):
     lesson_id: uuid.UUID
     title: str
-    difficulty: int
-    allocated_minutes: int
+    estimated_minutes: int
     status: str
 
 

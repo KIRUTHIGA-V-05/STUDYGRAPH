@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import httpx
 import uuid
+from datetime import datetime, timedelta
 
 from database import get_db
 from dependencies import get_current_user
 from config import settings
-from models import Course, Module, Lesson, LessonSchedule, CalendarEvent
+from models import Course, Module, Lesson, CalendarEvent
 from schemas import CalendarSyncRequest, CalendarSyncResponse, TokenData
 
 router = APIRouter()
@@ -26,19 +27,18 @@ async def sync_calendar(
     if not course:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found.")
 
-    scheduled = (
-        db.query(Lesson, LessonSchedule)
-        .join(LessonSchedule, Lesson.id == LessonSchedule.lesson_id)
-        .join(Module, Lesson.module_id == Module.id)
+    lessons = (
+        db.query(Lesson)
+        .join(Module)
         .filter(Module.course_id == body.course_id)
-        .order_by(LessonSchedule.scheduled_date)
+        .order_by(Module.order, Lesson.order)
         .all()
     )
 
-    if not scheduled:
+    if not lessons:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No scheduled lessons found. Run the scheduler first.",
+            detail="No lessons found. Generate a plan first.",
         )
 
     if not body.google_auth_code:
@@ -54,10 +54,10 @@ async def sync_calendar(
                         {
                             "lesson_id": str(lesson.id),
                             "title": lesson.title,
-                            "scheduled_date": schedule.scheduled_date,
-                            "allocated_minutes": schedule.allocated_minutes,
+                            "scheduled_date": datetime.utcnow().strftime("%Y-%m-%dT09:00:00"),
+                            "allocated_minutes": lesson.estimated_minutes,
                         }
-                        for lesson, schedule in scheduled
+                        for lesson in lessons
                     ],
                 },
             )
@@ -76,17 +76,23 @@ async def sync_calendar(
     sync_result = response.json()
 
     for event in sync_result.get("events", []):
-        existing = (
-            db.query(CalendarEvent)
-            .filter(CalendarEvent.lesson_id == uuid.UUID(event["lesson_id"]))
-            .first()
-        )
+        lesson_uuid = uuid.UUID(event["lesson_id"])
+        lesson = db.query(Lesson).filter(Lesson.id == lesson_uuid).first()
+        start_time = datetime.utcnow().replace(hour=9, minute=0, second=0, microsecond=0)
+        end_time   = start_time + timedelta(minutes=(lesson.estimated_minutes or 30) if lesson else 30)
+
+        existing = db.query(CalendarEvent).filter(CalendarEvent.lesson_id == lesson_uuid).first()
         if existing:
             existing.google_event_id = event["event_id"]
+            existing.start_time = start_time
+            existing.end_time   = end_time
         else:
             db.add(CalendarEvent(
-                lesson_id=uuid.UUID(event["lesson_id"]),
+                user_id=current_user.user_id,
+                lesson_id=lesson_uuid,
                 google_event_id=event["event_id"],
+                start_time=start_time,
+                end_time=end_time,
             ))
 
     db.commit()
@@ -99,7 +105,14 @@ async def delete_event(
     current_user: TokenData = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    event = db.query(CalendarEvent).filter(CalendarEvent.lesson_id == lesson_id).first()
+    event = (
+        db.query(CalendarEvent)
+        .filter(
+            CalendarEvent.lesson_id == lesson_id,
+            CalendarEvent.user_id == current_user.user_id,
+        )
+        .first()
+    )
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Calendar event not found.")
 

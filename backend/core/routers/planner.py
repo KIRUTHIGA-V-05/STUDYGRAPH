@@ -20,13 +20,13 @@ async def generate_plan(
 ):
     existing = (
         db.query(Course)
-        .filter(Course.user_id == current_user.user_id, Course.status == "active")
+        .filter(Course.user_id == current_user.user_id)
         .first()
     )
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="You already have an active course. Complete or archive it first.",
+            detail="You already have an active course. Complete or archive it before creating a new one.",
         )
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -35,7 +35,7 @@ async def generate_plan(
                 f"{settings.PLANNER_SERVICE_URL}/api/v1/planner/generate",
                 json={
                     "topic": body.topic,
-                    "target_days": body.target_days,
+                    "target_days": body.duration_days,
                     "user_context": body.user_context,
                 },
             )
@@ -55,10 +55,9 @@ async def generate_plan(
 
     course = Course(
         user_id=current_user.user_id,
-        topic=plan["topic"],
-        target_days=plan["target_days"],
-        days_per_week=body.days_per_week,
-        daily_study_minutes=body.daily_study_minutes,
+        title=plan["topic"],
+        description=f"Auto-generated course for: {plan['topic']}",
+        duration_days=plan["target_days"],
     )
     db.add(course)
     db.flush()
@@ -66,11 +65,9 @@ async def generate_plan(
     for mod_index, mod_data in enumerate(plan["modules"]):
         module = Module(
             course_id=course.id,
-            module_ref_id=mod_data.get("module_id"),
             title=mod_data["title"],
-            description=mod_data.get("description", ""),
-            order_index=mod_index + 1,
-            quiz_checkpoint=mod_data.get("quiz_checkpoint", True),
+            order=mod_index + 1,
+            difficulty_weight=None,
         )
         db.add(module)
         db.flush()
@@ -78,11 +75,11 @@ async def generate_plan(
         for les_index, les_data in enumerate(mod_data["lessons"]):
             lesson = Lesson(
                 module_id=module.id,
-                lesson_ref_id=les_data.get("lesson_id"),
                 title=les_data["title"],
-                difficulty=les_data.get("difficulty", 1),
+                content_type="text",
                 estimated_minutes=les_data.get("estimated_minutes", 30),
-                order_index=les_index + 1,
+                order=les_index + 1,
+                status="pending",
             )
             db.add(lesson)
 
@@ -93,7 +90,7 @@ async def generate_plan(
 
     return PlannerResponse(
         course_id=course.id,
-        topic=course.topic,
+        title=course.title,
         total_modules=len(course.modules),
         total_lessons=total_lessons,
         modules=course.modules,
@@ -118,27 +115,8 @@ def get_plan(
 
     return PlannerResponse(
         course_id=course.id,
-        topic=course.topic,
+        title=course.title,
         total_modules=len(course.modules),
         total_lessons=total_lessons,
         modules=course.modules,
     )
-
-
-@router.patch("/{course_id}/archive", status_code=status.HTTP_200_OK)
-def archive_course(
-    course_id: uuid.UUID,
-    current_user: TokenData = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    course = (
-        db.query(Course)
-        .filter(Course.id == course_id, Course.user_id == current_user.user_id)
-        .first()
-    )
-    if not course:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found.")
-
-    course.status = "archived"
-    db.commit()
-    return {"message": "Course archived.", "course_id": str(course_id)}
